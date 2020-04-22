@@ -1,0 +1,5 @@
+Dependencies:
+ - pandas 0.25.3 or greater
+ - os
+ - tqdm 4.43
+ - coscal
