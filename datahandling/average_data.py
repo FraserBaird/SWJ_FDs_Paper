@@ -9,37 +9,24 @@ from coscal.correct_data import apply_corrections
 def average_neutron_data(folder_path, operator, start_date, stop_date, rigidity_range={'min': 0, 'max': 20},
                          original_frequency='3600s', new_frequency='3600s', excluded_stations=[]):
     """
-    a function to average together several concurrent data files from the same neutron detector operator and average
-    them together.
 
-    Can be set to only include stations in a set rigidity range, or exclude stations from the average. Can also specify
-    an original frequency and a new frequency to resample the data prior to averaging. COSMOS-US data must be resampled
-    anyway as the timestamps are inconsistent.
-
+    :param excluded_stations:
     :param folder_path: string containing system path to folder containing data to be averaged. Must also contain a
-    meta-data file called 'station_info.txt'
+    meta-data file called 'something_to_pick_soon.txt'
     :param operator: string specifying the operator of the network supplying the data: must be 'COSMOS-UK', 'COSMOS-US'
-
+    or 'NMDB'
     :param start_date: pandas datetime containing the start date of the range of data to be averaged
     :param stop_date: pandas datetime containing the end date of the range of data to be averaged
-    :param rigidity_range: optional dictionary containing floats specifying the lower and upper range of rigidities for
-     data to be accepted. Keys must be 'min' and 'max'. Default: {'min': 0, 'max':20}
-    :param original_frequency: optional. String specifying the frequency the data was originally recorded at.
-     Default '3600s'
-    :param new_frequency: optional string specifying the frequency to resample the data to. default '3600s'
-    :param excluded_stations: optional list of station names to exclude from the average, default is an empty list []
+    :param rigidity_range: list containing floats specifying the lower and upper range of rigidities for data to be
+     accepted [lower_limit, upper_limit]
+    :param frequency: the time resolution of the averaged data
     :return: averaged data as a pandas dataframe
     """
-    # TODO reconsider the way the resampling is set up - it can probably be simplified
-    # TODO expand to neutron monitors
-    # specify the name of the metadata file
     metafile_name = 'station_info.txt'
     # check that the folder at the location exists - if not ask user to correct or exit
     folder_path = check_path_exists(folder_path)
     # navigate to the directory
     os.chdir(folder_path)
-    # get a dictionary containing various keys to be used
-    # TODO figure out a better key management system
     other_keys = get_other_keys(operator)
     metafile_name = check_path_exists(metafile_name)
     # read the meta data file
@@ -52,7 +39,7 @@ def average_neutron_data(folder_path, operator, start_date, stop_date, rigidity_
     error_keys = get_error_keys(operator)
     contributing_stations = {'name': [], 'rigidity': []}
 
-    length = (stop_date - start_date) / pd.Timedelta(new_frequency) + other_keys['length_mod']
+    length = (stop_date - start_date)/pd.Timedelta(new_frequency) + other_keys['length_mod']
     # loop through every file in the folder
     first_station = True
     for i in tqdm(range(0, len(names))):
@@ -76,8 +63,8 @@ def average_neutron_data(folder_path, operator, start_date, stop_date, rigidity_
             # if the UK is the operator then carry out QC check
             if "COSMOS-UK" == operator:
                 station_data = qc_check_data(station_data)
-            # correct data
-            station_data = apply_corrections(station_data, operator, rigidity, data_keys)
+            # correct data - this needs updated!
+            station_data = coscal.apply_corrections(station_data, operator, rigidity, data_keys)
             # remove outlying data points
             station_data = handle_outliers_interp(station_data, data_keys, 1, 97)
 
@@ -95,14 +82,9 @@ def average_neutron_data(folder_path, operator, start_date, stop_date, rigidity_
                 for key in data_keys:
                     all_data[key] = np.vstack((all_data[key], station_data[key].values))
 
-    error_dict = calculate_poisson_percentage(all_data, error_keys, data_keys)
-    # average the data ignoring nans - also returns the standard deviation of each data series
     average = average_each_key(all_data, data_keys)
     rel_change = dict_to_rel_change(average, data_keys)
-    # error_rel_change = dict_scale_to_data_mean(error_dict, error_keys, average, data_keys)
     rel_change['Time'] = index
-    for key in error_keys:
-        rel_change[key] = error_dict[key]
 
     final_df = pd.DataFrame(rel_change)
     final_df.set_index('Time', inplace=True)
@@ -394,17 +376,19 @@ def calculate_poisson_percentage(data_dict, error_keys, data_keys):
 def average_each_key(data_dict, keys):
     """
     function to average the data in a dict, key by key
-    :param data_dict: dict containing data
-    :param keys: data keys
+    :param data_dict: dict containing data 
+    :param keys: data keys 
     :return: dict containing the averaged data
     """
     average = {}
     for key in keys:
+        # sum up data
         summed = np.nansum(data_dict[key], axis=0)
-
-        average[key] = np.divide(summed, len(data_dict[key]))
-
-        average[key + '_std'] = np.nanstd(average[key])
+        # find the number of non-nan contributions to each point
+        num_not_nan = np.count_nonzero(~np.isnan(data_dict[key]), axis=0)
+        # calculate percentage poisson error
+        average['E_' + key] = np.multiply(np.divide(np.sqrt(summed), summed), 100)
+        average[key] = np.divide(summed, num_not_nan)
 
     return average
 
